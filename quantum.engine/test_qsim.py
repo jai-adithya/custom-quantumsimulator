@@ -1,6 +1,6 @@
 import numpy as np
 from numpy import pi
-from qsim import H, X, Y, Z, S, T, RX, RY, RZ, zero_state, apply_gate, CNOT
+from qsim import H, X, Y, Z, S, T, RX, RY, RZ, zero_state, apply_gate, CNOT, probabilities, measure
 
 # testing if all the main gates are unitary matrices
 def is_unitary(U):
@@ -80,3 +80,26 @@ def test_ghz_state():
     state = CNOT(state, 0, 2, 3)
     r = 1 / np.sqrt(2)
     assert np.allclose(state, [r, 0, 0, 0, 0, 0, 0, r])   # (|000⟩ + |111⟩)/√2
+
+# probability of bell state HAS to be 1/2 for 00 and 1/2 for 11
+def test_probabilities_bell():
+    state = CNOT(apply_gate(zero_state(2), H, 0, 2), 0, 1, 2)
+    assert np.allclose(probabilities(state), [0.5, 0, 0, 0.5])
+
+# probabilities of any state must always sum to 1
+def test_probabilities_sum_to_one():
+    state = apply_gate(zero_state(3), H, 1, 3)
+    assert np.isclose(np.sum(probabilities(state)), 1)
+
+# measuring bell state should always only give 00 and 11 as outputs, this test makes sure 01 and 10 dont get measured and that the number of each is roughly equal
+def test_measure_bell_only_00_and_11():
+    state = CNOT(apply_gate(zero_state(2), H, 0, 2), 0, 1, 2)
+    counts = measure(state, 1000, 2, seed=42)
+    assert set(counts) <= {"00", "11"}       # no "01" or "10" ever
+    assert 400 < counts["00"] < 600          # roughly half
+
+# doing the X gate on 00 should ONLY give 01 after measurement.
+def test_measure_certain_outcome():
+    state = apply_gate(zero_state(2), X, 0, 2)    # |01⟩
+    counts = measure(state, 100, 2, seed=1)
+    assert counts == {"01": 100}
