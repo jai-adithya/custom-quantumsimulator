@@ -2,6 +2,8 @@ import numpy as np
 from numpy import sqrt, exp, pi, cos, sin
 from functools import reduce
 from collections import Counter
+import json   
+
 
 #Defining all the quantum gates 
 # H creates superposition / swaps between + and 0 states or 1 and - states
@@ -22,7 +24,7 @@ Z = np.array([[1, 0],
 
 # 90° phase shift
 S = np.array([[1, 0],
-              [0, -1j]], dtype=complex)
+              [0, 1j]], dtype=complex)
 
 # 45° phase shift
 T = np.array([[1, 0], [0, exp(1j * pi / 4)]], dtype=complex)
@@ -84,7 +86,14 @@ def probabilities(state):
 
 # probabilty of bell state should be 0.5 for both 0s and both 1s, Bell state built using my own CNOT function
 bell_state = CNOT(apply_gate(zero_state(2), H, 0, 2), 0, 1, 2)
-print(probabilities(bell_state))
+
+# bloch vectors 
+def bloch_vector(state, qubit, n):
+    psi = state.reshape([2] * n)                 # one axis per qubit, axis 0 = qubit n-1
+    psi = np.moveaxis(psi, n - 1 - qubit, 0)     # bring this qubit's axis to the front
+    psi = psi.reshape(2, -1)                     # row 0: qubit is 0, row 1: qubit is 1
+    rho = psi @ psi.conj().T                     # 2x2 reduced density matrix
+    return np.array([np.trace(rho @ P).real for P in (X, Y, Z)])
 
 # this is a function to take random values and measure
 def measure(state, shots, n, seed=None):
@@ -95,7 +104,33 @@ def measure(state, shots, n, seed=None):
     bitstrings = [format(i, f"0{n}b") for i in indices]
     return dict(Counter(bitstrings))
 
-print (measure(bell_state, 1000, 2))
+
+# lookup tables to integrate between javascript and python
+FIXED = {"X": X, "Y": Y, "Z": Z, "H": H, "S": S, "T": T}
+ROTATIONS = {"RX": RX, "RY": RY, "RZ": RZ}
+
+# most important function, this function simulates a quantum circuit with all the input gates and states and gives outputs.
+def simulate(circuit):
+    n = circuit["qubits"]
+    state = zero_state(n)
+    for g in circuit["gates"]:
+        name = g["gate"]
+        if name in FIXED:
+            state = apply_gate(state, FIXED[name], g["target"], n)
+        elif name in ROTATIONS:
+            state = apply_gate(state, ROTATIONS[name](g["angle"]), g["target"], n)
+        elif name == "CNOT":
+            state = CNOT(state, g["control"], g["target"], n)
+        else:
+            raise ValueError(f"Unknown gate: {name}")
+    return {
+        "labels": [format(i, f"0{n}b") for i in range(2**n)],
+        "probabilities": probabilities(state).tolist(),
+        "bloch": [bloch_vector(state, q, n).tolist() for q in range(n)],
+    }
+
+def simulate_json(circuit_json):
+    return json.dumps(simulate(json.loads(circuit_json)))
 
    
 

@@ -1,6 +1,6 @@
 import numpy as np
 from numpy import pi
-from qsim import H, X, Y, Z, S, T, RX, RY, RZ, zero_state, apply_gate, CNOT, probabilities, measure
+from qsim import H, X, Y, Z, S, T, RX, RY, RZ, zero_state, apply_gate, CNOT, probabilities, measure, bloch_vector, simulate
 
 # testing if all the main gates are unitary matrices
 def is_unitary(U):
@@ -103,3 +103,39 @@ def test_measure_certain_outcome():
     state = apply_gate(zero_state(2), X, 0, 2)    # |01⟩
     counts = measure(state, 100, 2, seed=1)
     assert counts == {"01": 100}
+
+
+# all the tests to see if the bloch line function I defined is working
+def test_bloch_zero():
+    # |0⟩ points straight up
+    assert np.allclose(bloch_vector(zero_state(1), 0, 1), [0, 0, 1])
+
+def test_bloch_plus():
+    # H|0⟩ = |+⟩ points along x
+    state = apply_gate(zero_state(1), H, 0, 1)
+    assert np.allclose(bloch_vector(state, 0, 1), [1, 0, 0])
+
+def test_bloch_plus_i():
+    # S·H|0⟩ = |+i⟩ points along y
+    state = apply_gate(apply_gate(zero_state(1), H, 0, 1), S, 0, 1)
+    assert np.allclose(bloch_vector(state, 0, 1), [0, 1, 0])
+
+def test_bloch_bell_is_centre():
+    # an entangled qubit sits at the centre
+    state = CNOT(apply_gate(zero_state(2), H, 0, 2), 0, 1, 2)
+    assert np.allclose(bloch_vector(state, 0, 2), [0, 0, 0])
+
+def test_bloch_qubit_order():
+    # |10⟩: qubit 1 points down, qubit 0 points up
+    state = apply_gate(zero_state(2), X, 1, 2)
+    assert np.allclose(bloch_vector(state, 1, 2), [0, 0, -1])
+    assert np.allclose(bloch_vector(state, 0, 2), [0, 0, 1])
+
+def test_entanglement_shrinks_arrow():
+    # RY(θ) then CNOT: qubit 0's arrow is (0, 0, cos θ)
+    for theta in [0, np.pi / 4, np.pi / 2]:
+        state = CNOT(apply_gate(zero_state(2), RY(theta), 0, 2), 0, 1, 2)
+        assert np.allclose(bloch_vector(state, 0, 2), [0, 0, np.cos(theta)])
+
+state = apply_gate(apply_gate(zero_state(1), H, 0, 1), S, 0, 1)
+print(bloch_vector(state, 0, 1))
