@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quantum Simulator</title>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0d0f14; color: #e8e8ef;
+           max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    .bar-row { display: flex; align-items: center; gap: 12px; margin: 6px 0; font-family: monospace; }
+    .bar-track { flex: 1; background: #1c2030; height: 18px; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; background: #7c9cff; }
+    select { font-size: 16px; padding: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Quantum Simulator</h1>
+  <p id="status">Loading quantum engine…</p>
+  <select id="preset" disabled>
+    <option value="bell">Bell state</option>
+    <option value="ghz">GHZ (3 qubits)</option>
+    <option value="plus">Superposition</option>
+  </select>
+  <div id="bars"></div>
+  <pre id="bloch"></pre>
+
+  <script>
+    const PRESETS = {
+      bell: { qubits: 2, gates: [{gate: "H", target: 0}, {gate: "CNOT", control: 0, target: 1}] },
+      ghz:  { qubits: 3, gates: [{gate: "H", target: 0}, {gate: "CNOT", control: 0, target: 1},
+                                 {gate: "CNOT", control: 0, target: 2}] },
+      plus: { qubits: 1, gates: [{gate: "H", target: 0}] },
+    };
+
+    let simulate;
+
+    async function main() {
+      const pyodide = await loadPyodide();
+      await pyodide.loadPackage("numpy");
+      const code = await (await fetch("qsim.py")).text();
+      pyodide.runPython(code);
+      simulate = pyodide.globals.get("simulate_json");
+
+      document.getElementById("status").textContent = "Engine ready.";
+      const select = document.getElementById("preset");
+      select.disabled = false;
+      select.addEventListener("change", () => run(select.value));
+      run(select.value);
+    }
+
+    function run(name) {
+      const result = JSON.parse(simulate(JSON.stringify(PRESETS[name])));
+      const bars = document.getElementById("bars");
+      bars.innerHTML = "";
+      result.labels.forEach((label, i) => {
+        const p = result.probabilities[i];
+        const row = document.createElement("div");
+        row.className = "bar-row";
+        row.innerHTML = `<span>|${label}⟩</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${p * 100}%"></div></div>
+          <span>${(p * 100).toFixed(1)}%</span>`;
+        bars.appendChild(row);
+      });
+      document.getElementById("bloch").textContent = result.bloch
+        .map((v, q) => `qubit ${q}: (${v.map(x => x.toFixed(2)).join(", ")})`)
+        .join("\n");
+    }
+
+    main().catch(err => {
+      document.getElementById("status").textContent = "Error: " + err;
+    });
+  </script>
+</body>
+</html>
