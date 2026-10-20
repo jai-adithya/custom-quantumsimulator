@@ -137,5 +137,3 @@ def test_entanglement_shrinks_arrow():
         state = CNOT(apply_gate(zero_state(2), RY(theta), 0, 2), 0, 1, 2)
         assert np.allclose(bloch_vector(state, 0, 2), [0, 0, np.cos(theta)])
 
-state = apply_gate(apply_gate(zero_state(1), H, 0, 1), S, 0, 1)
-print(bloch_vector(state, 0, 1))

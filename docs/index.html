@@ -6,51 +6,236 @@
   <title>Quantum Simulator</title>
   <script src="https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; background: #0d0f14; color: #e8e8ef;
-           max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    :root {
+      --bg: #0d0f14;
+      --surface: #161a24;
+      --surface-2: #1c2030;
+      --text: #e8e8ef;
+      --muted: #8a90a6;
+      --accent: #7c9cff;
+      --wire: #3a4157;
+      --gate-h: #7c9cff;
+      --gate-pauli: #ff8fa3;
+      --gate-phase: #f5c26b;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+           max-width: 760px; margin: 32px auto; padding: 0 16px; }
+    h1 { margin-bottom: 4px; }
+    h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 28px 0 10px;
+         text-transform: uppercase; letter-spacing: 0.06em; }
+    #status { color: var(--muted); margin-top: 0; }
+    .hint { color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+
+    /* Toolbar */
+    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; }
+    select, button { font: inherit; font-size: 15px; padding: 6px 10px; border-radius: 8px;
+                     border: 1px solid var(--wire); background: var(--surface); color: var(--text); }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+
+    /* Gates */
+    .palette { display: flex; flex-wrap: wrap; gap: 10px; }
+    .gate { width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center;
+            font-weight: 700; font-size: 17px; color: #10131b; user-select: none; }
+    .palette .gate { cursor: grab; border: 2px solid transparent; }
+    .palette .gate.selected { border-color: var(--text); box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text); }
+    .gate-H { background: var(--gate-h); }
+    .gate-X, .gate-Y, .gate-Z { background: var(--gate-pauli); }
+    .gate-S, .gate-T { background: var(--gate-phase); }
+
+    /* Circuit grid */
+    .circuit-scroll { overflow-x: auto; padding-bottom: 6px; }
+    .circuit { display: inline-flex; flex-direction: column; gap: 8px; min-width: 100%; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .qlabel { width: 52px; flex-shrink: 0; font-family: monospace; color: var(--muted); }
+    .track { position: relative; display: flex; gap: 6px; }
+    .track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 2px;
+                     background: var(--wire); transform: translateY(-50%); }
+    .cell { position: relative; width: 48px; height: 48px; border-radius: 8px; display: grid;
+            place-items: center; cursor: pointer; }
+    .cell:hover, .cell.over { background: rgba(124, 156, 255, 0.15); }
+    .cell .gate { position: relative; }
+
+    /* Results */
     .bar-row { display: flex; align-items: center; gap: 12px; margin: 6px 0; font-family: monospace; }
-    .bar-track { flex: 1; background: #1c2030; height: 18px; border-radius: 4px; overflow: hidden; }
-    .bar-fill { height: 100%; background: #7c9cff; }
-    select { font-size: 16px; padding: 6px; }
+    .bar-track { flex: 1; background: var(--surface-2); height: 18px; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); transition: width 0.25s ease; }
+    #bloch { font-family: monospace; color: var(--muted); }
+    #error { color: var(--gate-pauli); }
   </style>
 </head>
 <body>
   <h1>Quantum Simulator</h1>
   <p id="status">Loading quantum engine…</p>
-  <select id="preset" disabled>
-    <option value="bell">Bell state</option>
-    <option value="ghz">GHZ (3 qubits)</option>
-    <option value="plus">Superposition</option>
-  </select>
+
+  <h2>Gates</h2>
+  <div class="palette" id="palette"></div>
+  <p class="hint">Drag a gate onto the circuit, or tap a gate and then tap a spot. Tap a placed gate to remove it.</p>
+
+  <div class="toolbar">
+    <label>Qubits
+      <select id="qubits">
+        <option>1</option><option selected>2</option><option>3</option><option>4</option>
+      </select>
+    </label>
+    <button id="clear">Clear circuit</button>
+  </div>
+
+  <h2>Circuit</h2>
+  <div class="circuit-scroll"><div class="circuit" id="circuit"></div></div>
+
+  <h2>Probabilities</h2>
   <div id="bars"></div>
+  <p id="error"></p>
+
+  <h2>Bloch vectors</h2>
   <pre id="bloch"></pre>
 
   <script>
-    const PRESETS = {
-      bell: { qubits: 2, gates: [{gate: "H", target: 0}, {gate: "CNOT", control: 0, target: 1}] },
-      ghz:  { qubits: 3, gates: [{gate: "H", target: 0}, {gate: "CNOT", control: 0, target: 1},
-                                 {gate: "CNOT", control: 0, target: 2}] },
-      plus: { qubits: 1, gates: [{gate: "H", target: 0}] },
-    };
+    const COLS = 8;                                  // time steps in the circuit
+    const GATES = ["H", "X", "Y", "Z", "S", "T"];
 
-    let simulate;
+    let numQubits = 2;
+    let grid = makeGrid(numQubits);                  // grid[qubit][column] = gate name or null
+    let selected = null;                             // gate picked by tapping the palette
+    let simulate = null;                             // set once Pyodide has loaded the engine
 
-    async function main() {
-      const pyodide = await loadPyodide();
-      await pyodide.loadPackage("numpy");
-      const code = await (await fetch("qsim.py")).text();
-      pyodide.runPython(code);
-      simulate = pyodide.globals.get("simulate_json");
-
-      document.getElementById("status").textContent = "Engine ready.";
-      const select = document.getElementById("preset");
-      select.disabled = false;
-      select.addEventListener("change", () => run(select.value));
-      run(select.value);
+    function makeGrid(qubits, old) {
+      return Array.from({ length: qubits }, (_, q) =>
+        Array.from({ length: COLS }, (_, c) => (old && old[q] ? old[q][c] : null)));
     }
 
-    function run(name) {
-      const result = JSON.parse(simulate(JSON.stringify(PRESETS[name])));
+    // Turn the grid into the circuit format simulate() expects:
+    // column by column, top qubit to bottom qubit.
+    function toCircuit() {
+      const gates = [];
+      for (let c = 0; c < COLS; c++) {
+        for (let q = 0; q < numQubits; q++) {
+          if (grid[q][c]) gates.push({ gate: grid[q][c], target: q });
+        }
+      }
+      return { qubits: numQubits, gates };
+    }
+
+    function gateEl(name) {
+      const el = document.createElement("div");
+      el.className = `gate gate-${name}`;
+      el.textContent = name;
+      return el;
+    }
+
+    // ---------- Palette ----------
+    function renderPalette() {
+      const palette = document.getElementById("palette");
+      palette.innerHTML = "";
+      for (const name of GATES) {
+        const el = gateEl(name);
+        el.draggable = true;
+        el.dataset.gate = name;
+        el.title = `${name} gate`;
+        if (selected === name) el.classList.add("selected");
+        el.addEventListener("dragstart", e => {
+          e.dataTransfer.setData("text/plain", name);
+          e.dataTransfer.effectAllowed = "copy";
+        });
+        el.addEventListener("click", () => {
+          selected = selected === name ? null : name;
+          renderPalette();
+        });
+        palette.appendChild(el);
+      }
+    }
+
+    // ---------- Circuit grid ----------
+    function renderCircuit() {
+      const circuit = document.getElementById("circuit");
+      circuit.innerHTML = "";
+      for (let q = 0; q < numQubits; q++) {
+        const row = document.createElement("div");
+        row.className = "row";
+        const label = document.createElement("div");
+        label.className = "qlabel";
+        label.textContent = `q${q} |0⟩`;
+        const track = document.createElement("div");
+        track.className = "track";
+        for (let c = 0; c < COLS; c++) {
+          const cell = document.createElement("div");
+          cell.className = "cell";
+          cell.dataset.q = q;
+          cell.dataset.c = c;
+          if (grid[q][c]) cell.appendChild(gateEl(grid[q][c]));
+          track.appendChild(cell);
+        }
+        row.append(label, track);
+        circuit.appendChild(row);
+      }
+    }
+
+    function setGate(q, c, name) {
+      grid[q][c] = name;
+      renderCircuit();
+      run();
+    }
+
+    // One set of listeners on the whole circuit handles every cell.
+    function cellFrom(e) { return e.target.closest(".cell"); }
+
+    const circuitEl = document.getElementById("circuit");
+    circuitEl.addEventListener("dragover", e => {
+      const cell = cellFrom(e);
+      if (!cell) return;
+      e.preventDefault();                          // allows dropping here
+      cell.classList.add("over");
+    });
+    circuitEl.addEventListener("dragleave", e => {
+      const cell = cellFrom(e);
+      if (cell) cell.classList.remove("over");
+    });
+    circuitEl.addEventListener("drop", e => {
+      const cell = cellFrom(e);
+      if (!cell) return;
+      e.preventDefault();
+      cell.classList.remove("over");
+      const name = e.dataTransfer.getData("text/plain");
+      if (GATES.includes(name)) setGate(+cell.dataset.q, +cell.dataset.c, name);
+    });
+    circuitEl.addEventListener("click", e => {
+      const cell = cellFrom(e);
+      if (!cell) return;
+      const q = +cell.dataset.q, c = +cell.dataset.c;
+      if (selected) setGate(q, c, selected);       // tap-to-place
+      else if (grid[q][c]) setGate(q, c, null);    // tap a placed gate to remove it
+    });
+
+    // ---------- Toolbar ----------
+    document.getElementById("qubits").addEventListener("change", e => {
+      numQubits = +e.target.value;
+      grid = makeGrid(numQubits, grid);            // keeps gates on qubits that still exist
+      renderCircuit();
+      run();
+    });
+    document.getElementById("clear").addEventListener("click", () => {
+      grid = makeGrid(numQubits);
+      renderCircuit();
+      run();
+    });
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && selected) { selected = null; renderPalette(); }
+    });
+
+    // ---------- Results ----------
+    function run() {
+      if (!simulate) return;                       // engine still loading
+      const errorEl = document.getElementById("error");
+      let result;
+      try {
+        result = JSON.parse(simulate(JSON.stringify(toCircuit())));
+        errorEl.textContent = "";
+      } catch (err) {
+        errorEl.textContent = "Simulation error: " + err;
+        return;
+      }
       const bars = document.getElementById("bars");
       bars.innerHTML = "";
       result.labels.forEach((label, i) => {
@@ -67,6 +252,19 @@
         .join("\n");
     }
 
+    // ---------- Start-up ----------
+    async function main() {
+      const pyodide = await loadPyodide();
+      await pyodide.loadPackage("numpy");
+      const code = await (await fetch("qsim.py")).text();
+      pyodide.runPython(code);
+      simulate = pyodide.globals.get("simulate_json");
+      document.getElementById("status").textContent = "Engine ready.";
+      run();
+    }
+
+    renderPalette();
+    renderCircuit();
     main().catch(err => {
       document.getElementById("status").textContent = "Error: " + err;
     });
