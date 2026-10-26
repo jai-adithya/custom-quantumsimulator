@@ -3,8 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Quantum Simulator</title>
+  <title>Quantum Circuit Simulator</title>
   <script src="https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #0d0f14;
@@ -17,15 +20,16 @@
       --gate-h: #7c9cff;
       --gate-pauli: #ff8fa3;
       --gate-phase: #f5c26b;
+      --gate-cnot: #6fd6b5;
     }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+    body { font-family: "Inter", system-ui, sans-serif; background: var(--bg); color: var(--text);
            max-width: 760px; margin: 32px auto; padding: 0 16px; }
     h1 { margin-bottom: 4px; }
     h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 28px 0 10px;
          text-transform: uppercase; letter-spacing: 0.06em; }
     #status { color: var(--muted); margin-top: 0; }
-    .hint { color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+    .hint { color: var(--muted); font-size: 14px; margin: 8px 0 0; line-height: 1.45; }
 
     /* Toolbar */
     .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; }
@@ -39,10 +43,12 @@
     .gate { width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center;
             font-weight: 700; font-size: 17px; color: #10131b; user-select: none; }
     .palette .gate { cursor: grab; border: 2px solid transparent; }
-    .palette .gate.selected { border-color: var(--text); box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text); }
+    .palette .gate.selected { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text); }
     .gate-H { background: var(--gate-h); }
     .gate-X, .gate-Y, .gate-Z { background: var(--gate-pauli); }
     .gate-S, .gate-T { background: var(--gate-phase); }
+    .gate-CNOT { background: var(--gate-cnot); width: 64px; font-size: 14px; }
+    .cell .gate { position: relative; z-index: 1; cursor: grab; }
 
     /* Circuit grid */
     .circuit-scroll { overflow-x: auto; padding-bottom: 6px; }
@@ -55,23 +61,53 @@
     .cell { position: relative; width: 48px; height: 48px; border-radius: 8px; display: grid;
             place-items: center; cursor: pointer; }
     .cell:hover, .cell.over { background: rgba(124, 156, 255, 0.15); }
-    .cell .gate { position: relative; }
+
+    /* CNOT drawing: a vertical line joining control and target */
+    .cell.v-top::after, .cell.v-mid::after, .cell.v-bot::after {
+      content: ""; position: absolute; left: 50%; width: 2px; margin-left: -1px;
+      background: var(--gate-cnot);
+    }
+    .cell.v-top::after { top: 50%; bottom: -4px; }
+    .cell.v-mid::after { top: -4px; bottom: -4px; }
+    .cell.v-bot::after { top: -4px; bottom: 50%; }
+    .ctrl { position: relative; z-index: 1; width: 14px; height: 14px; border-radius: 50%;
+            background: var(--gate-cnot); box-shadow: 0 0 0 8px transparent; }
+    .targ { position: relative; z-index: 1; width: 30px; height: 30px; border-radius: 50%;
+            border: 2px solid var(--gate-cnot); background: var(--bg); }
+    .targ::before, .targ::after { content: ""; position: absolute; background: var(--gate-cnot); }
+    .targ::before { left: 50%; top: 3px; bottom: 3px; width: 2px; margin-left: -1px; }
+    .targ::after { top: 50%; left: 3px; right: 3px; height: 2px; margin-top: -1px; }
 
     /* Results */
     .bar-row { display: flex; align-items: center; gap: 12px; margin: 6px 0; font-family: monospace; }
+    .bar-row span:last-child { width: 52px; text-align: right; flex-shrink: 0; }
     .bar-track { flex: 1; background: var(--surface-2); height: 18px; border-radius: 4px; overflow: hidden; }
     .bar-fill { height: 100%; background: var(--accent); transition: width 0.25s ease; }
-    #bloch { font-family: monospace; color: var(--muted); }
-    #error { color: var(--gate-pauli); }
+    /* Bloch spheres */
+    .spheres { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+    @media (min-width: 600px) {
+      .spheres { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    }
+    .sphere-card { background: var(--surface); border: 1px solid var(--surface-2); border-radius: 12px;
+                   padding: 10px 10px 12px; }
+    .sphere-card h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; font-family: monospace; }
+    .sphere-card canvas { display: block; width: 100%; aspect-ratio: 1; cursor: grab; touch-action: none; }
+    .sphere-card canvas:active { cursor: grabbing; }
+    .readout { font-family: monospace; font-size: 13px; color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+    .readout .tag { color: var(--gate-cnot); }
+    #message { color: var(--gate-pauli); min-height: 1.2em; }
   </style>
 </head>
 <body>
-  <h1>Quantum Simulator</h1>
+  <h1>Quantum Circuit Simulator</h1>
   <p id="status">Loading quantum engine…</p>
 
   <h2>Gates</h2>
   <div class="palette" id="palette"></div>
-  <p class="hint">Drag a gate onto the circuit, or tap a gate and then tap a spot. Tap a placed gate to remove it.</p>
+  <p class="hint">
+    Drag a gate onto the circuit, or tap a gate and then tap a spot. Drag a placed gate to move it; tap it to remove it.<br>
+    CNOT: place it on the target qubit (⊕). Tap the control dot (●) to move it to another qubit, or tap ⊕ to remove it.
+  </p>
 
   <div class="toolbar">
     <label>Qubits
@@ -79,38 +115,60 @@
         <option>1</option><option selected>2</option><option>3</option><option>4</option>
       </select>
     </label>
+    <label>Example
+      <select id="preset">
+        <option value="">Choose…</option>
+        <option value="superposition">Superposition</option>
+        <option value="bell">Bell state</option>
+        <option value="ghz">GHZ (3 qubits)</option>
+        <option value="interference">Interference: H Z H = X</option>
+        <option value="phase">Phase: H then S</option>
+      </select>
+    </label>
     <button id="clear">Clear circuit</button>
   </div>
+  <p id="message"></p>
 
   <h2>Circuit</h2>
   <div class="circuit-scroll"><div class="circuit" id="circuit"></div></div>
 
   <h2>Probabilities</h2>
   <div id="bars"></div>
-  <p id="error"></p>
 
-  <h2>Bloch vectors</h2>
-  <pre id="bloch"></pre>
+  <h2>Bloch spheres</h2>
+  <p class="hint">One sphere per qubit. Drag a sphere to rotate it. A shorter arrow means the qubit is entangled with others.</p>
+  <div class="spheres" id="spheres"></div>
 
   <script>
-    const COLS = 8;                                  // time steps in the circuit
-    const GATES = ["H", "X", "Y", "Z", "S", "T"];
+    const COLS = 8;                                       // time steps in the circuit
+    const SINGLE = ["H", "X", "Y", "Z", "S", "T"];        // one-qubit gates
+    const PALETTE = [...SINGLE, "CNOT"];
 
+    // Circuit state:
+    //   grid[qubit][column] = one-qubit gate name, or null
+    //   cnots[column]       = { control, target }, or null
+    // A column holding a CNOT holds nothing else, which keeps the rules simple.
     let numQubits = 2;
-    let grid = makeGrid(numQubits);                  // grid[qubit][column] = gate name or null
-    let selected = null;                             // gate picked by tapping the palette
-    let simulate = null;                             // set once Pyodide has loaded the engine
+    let grid = makeGrid(numQubits);
+    let cnots = Array(COLS).fill(null);
+    let selected = null;                                  // gate picked by tapping the palette
+    let simulate = null;                                  // set once Pyodide has loaded the engine
 
     function makeGrid(qubits, old) {
       return Array.from({ length: qubits }, (_, q) =>
         Array.from({ length: COLS }, (_, c) => (old && old[q] ? old[q][c] : null)));
     }
 
-    // Turn the grid into the circuit format simulate() expects:
-    // column by column, top qubit to bottom qubit.
+    function say(text) { document.getElementById("message").textContent = text; }
+
+    // Turn the circuit into the format simulate() expects, column by column.
     function toCircuit() {
       const gates = [];
       for (let c = 0; c < COLS; c++) {
+        if (cnots[c]) {
+          gates.push({ gate: "CNOT", control: cnots[c].control, target: cnots[c].target });
+          continue;
+        }
         for (let q = 0; q < numQubits; q++) {
           if (grid[q][c]) gates.push({ gate: grid[q][c], target: q });
         }
@@ -118,6 +176,32 @@
       return { qubits: numQubits, gates };
     }
 
+    // ---------- Editing rules ----------
+    function placeSingle(q, c, name) {
+      cnots[c] = null;                                    // a one-qubit gate replaces a CNOT in that column
+      grid[q][c] = name;
+    }
+
+    function placeCnot(q, c) {
+      if (numQubits < 2) { say("CNOT needs at least 2 qubits."); return; }
+      for (let r = 0; r < numQubits; r++) grid[r][c] = null;   // CNOT takes the whole column
+      const control = q > 0 ? q - 1 : q + 1;              // default control: the qubit above (or below)
+      cnots[c] = { control, target: q };
+    }
+
+    function cycleControl(c) {
+      const g = cnots[c];
+      let next = g.control;
+      do { next = (next + 1) % numQubits; } while (next === g.target);
+      g.control = next;
+    }
+
+    function changed() {
+      renderCircuit();
+      run();
+    }
+
+    // ---------- Palette ----------
     function gateEl(name) {
       const el = document.createElement("div");
       el.className = `gate gate-${name}`;
@@ -125,19 +209,17 @@
       return el;
     }
 
-    // ---------- Palette ----------
     function renderPalette() {
       const palette = document.getElementById("palette");
       palette.innerHTML = "";
-      for (const name of GATES) {
+      for (const name of PALETTE) {
         const el = gateEl(name);
         el.draggable = true;
-        el.dataset.gate = name;
-        el.title = `${name} gate`;
+        el.title = name === "CNOT" ? "CNOT (controlled-X)" : `${name} gate`;
         if (selected === name) el.classList.add("selected");
         el.addEventListener("dragstart", e => {
-          e.dataTransfer.setData("text/plain", name);
-          e.dataTransfer.effectAllowed = "copy";
+          e.dataTransfer.setData("text/plain", `new:${name}`);
+          e.dataTransfer.effectAllowed = "copyMove";
         });
         el.addEventListener("click", () => {
           selected = selected === name ? null : name;
@@ -159,23 +241,43 @@
         label.textContent = `q${q} |0⟩`;
         const track = document.createElement("div");
         track.className = "track";
+
         for (let c = 0; c < COLS; c++) {
           const cell = document.createElement("div");
           cell.className = "cell";
           cell.dataset.q = q;
           cell.dataset.c = c;
-          if (grid[q][c]) cell.appendChild(gateEl(grid[q][c]));
+          const g = cnots[c];
+          if (g) {
+            const top = Math.min(g.control, g.target), bottom = Math.max(g.control, g.target);
+            if (q === top) cell.classList.add("v-top");
+            else if (q === bottom) cell.classList.add("v-bot");
+            else if (q > top && q < bottom) cell.classList.add("v-mid");
+            if (q === g.control) {
+              const dot = document.createElement("div");
+              dot.className = "ctrl";
+              dot.title = "Control: tap to move";
+              cell.appendChild(dot);
+            } else if (q === g.target) {
+              const t = document.createElement("div");
+              t.className = "targ";
+              t.title = "Target: tap to remove";
+              cell.appendChild(t);
+            }
+          } else if (grid[q][c]) {
+            const el = gateEl(grid[q][c]);
+            el.draggable = true;
+            el.addEventListener("dragstart", e => {
+              e.dataTransfer.setData("text/plain", `move:${q}:${c}`);
+              e.dataTransfer.effectAllowed = "move";
+            });
+            cell.appendChild(el);
+          }
           track.appendChild(cell);
         }
         row.append(label, track);
         circuit.appendChild(row);
       }
-    }
-
-    function setGate(q, c, name) {
-      grid[q][c] = name;
-      renderCircuit();
-      run();
     }
 
     // One set of listeners on the whole circuit handles every cell.
@@ -185,7 +287,7 @@
     circuitEl.addEventListener("dragover", e => {
       const cell = cellFrom(e);
       if (!cell) return;
-      e.preventDefault();                          // allows dropping here
+      e.preventDefault();                                 // allows dropping here
       cell.classList.add("over");
     });
     circuitEl.addEventListener("dragleave", e => {
@@ -197,43 +299,306 @@
       if (!cell) return;
       e.preventDefault();
       cell.classList.remove("over");
-      const name = e.dataTransfer.getData("text/plain");
-      if (GATES.includes(name)) setGate(+cell.dataset.q, +cell.dataset.c, name);
+      say("");
+      const q = +cell.dataset.q, c = +cell.dataset.c;
+      const [kind, a, b] = e.dataTransfer.getData("text/plain").split(":");
+      if (kind === "new" && a === "CNOT") placeCnot(q, c);
+      else if (kind === "new" && SINGLE.includes(a)) placeSingle(q, c, a);
+      else if (kind === "move") {
+        const fromQ = +a, fromC = +b;
+        if (fromQ === q && fromC === c) return;
+        const name = grid[fromQ][fromC];
+        if (!name) return;
+        grid[fromQ][fromC] = null;
+        placeSingle(q, c, name);
+      } else return;
+      changed();
     });
     circuitEl.addEventListener("click", e => {
       const cell = cellFrom(e);
       if (!cell) return;
+      say("");
       const q = +cell.dataset.q, c = +cell.dataset.c;
-      if (selected) setGate(q, c, selected);       // tap-to-place
-      else if (grid[q][c]) setGate(q, c, null);    // tap a placed gate to remove it
+      const g = cnots[c];
+      if (selected === "CNOT") placeCnot(q, c);           // tap-to-place
+      else if (selected) placeSingle(q, c, selected);
+      else if (g && q === g.control) cycleControl(c);     // tap ● to move the control
+      else if (g && q === g.target) cnots[c] = null;      // tap ⊕ to remove the CNOT
+      else if (grid[q][c]) grid[q][c] = null;             // tap a gate to remove it
+      else return;
+      changed();
     });
 
     // ---------- Toolbar ----------
+    function setQubits(n) {
+      numQubits = n;
+      document.getElementById("qubits").value = String(n);
+      grid = makeGrid(numQubits, grid);                   // keeps gates on qubits that still exist
+      cnots = cnots.map(g => (g && g.control < n && g.target < n ? g : null));
+    }
+
     document.getElementById("qubits").addEventListener("change", e => {
-      numQubits = +e.target.value;
-      grid = makeGrid(numQubits, grid);            // keeps gates on qubits that still exist
-      renderCircuit();
-      run();
+      say("");
+      setQubits(+e.target.value);
+      changed();
     });
+
     document.getElementById("clear").addEventListener("click", () => {
+      say("");
       grid = makeGrid(numQubits);
-      renderCircuit();
-      run();
+      cnots = Array(COLS).fill(null);
+      changed();
     });
+
+    const PRESETS = {
+      superposition: { qubits: 1, steps: [["H", 0]] },
+      bell:          { qubits: 2, steps: [["H", 0], ["CNOT", 0, 1]] },
+      ghz:           { qubits: 3, steps: [["H", 0], ["CNOT", 0, 1], ["CNOT", 0, 2]] },
+      interference:  { qubits: 1, steps: [["H", 0], ["Z", 0], ["H", 0]] },
+      phase:         { qubits: 1, steps: [["H", 0], ["S", 0]] },
+    };
+
+    document.getElementById("preset").addEventListener("change", e => {
+      const p = PRESETS[e.target.value];
+      if (!p) return;
+      say("");
+      setQubits(p.qubits);
+      grid = makeGrid(p.qubits);
+      cnots = Array(COLS).fill(null);
+      p.steps.forEach(([name, a, b], c) => {             // one step per column
+        if (name === "CNOT") cnots[c] = { control: a, target: b };
+        else grid[a][c] = name;
+      });
+      e.target.value = "";
+      changed();
+    });
+
     document.addEventListener("keydown", e => {
       if (e.key === "Escape" && selected) { selected = null; renderPalette(); }
     });
 
+    // ---------- Bloch spheres ----------
+    // Drawn with plain 2D canvas maths, no 3D library: each point on the sphere is
+    // rotated by the viewing angles and projected flat onto the canvas.
+    const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const vlen = v => Math.hypot(v[0], v[1], v[2]);
+    const vscale = (v, s) => [v[0] * s, v[1] * s, v[2] * s];
+    const vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const vcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const vnorm = v => { const l = vlen(v); return l < 1e-9 ? [0, 0, 1] : vscale(v, 1 / l); };
+
+    // Rotate unit vector a towards unit vector b by fraction t (spherical interpolation).
+    function slerp(a, b, t) {
+      const d = Math.max(-1, Math.min(1, vdot(a, b)));
+      const angle = Math.acos(d);
+      if (angle < 1e-4) return b;
+      let axis = vcross(a, b);
+      if (vlen(axis) < 1e-6) {                              // opposite directions: pick any perpendicular axis
+        axis = vcross(a, Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]);
+      }
+      axis = vnorm(axis);
+      const th = angle * t, c = Math.cos(th), s = Math.sin(th);
+      const k = vcross(axis, a), kd = vdot(axis, a);         // Rodrigues' rotation formula
+      return [0, 1, 2].map(i => a[i] * c + k[i] * s + axis[i] * kd * (1 - c));
+    }
+
+    class BlochSphere {
+      constructor(index) {
+        this.card = document.createElement("div");
+        this.card.className = "sphere-card";
+        this.card.innerHTML = `<h3>qubit ${index}</h3><canvas aria-label="Bloch sphere for qubit ${index}"></canvas><p class="readout"></p>`;
+        this.canvas = this.card.querySelector("canvas");
+        this.readout = this.card.querySelector(".readout");
+        this.ctx = this.canvas.getContext("2d");
+        this.yaw = -0.55;                                   // viewing angles, changed by dragging
+        this.pitch = 0.32;
+        this.vec = [0, 0, 1];                               // what is drawn right now
+        this.anim = null;
+
+        // Drag to rotate (mouse and touch).
+        let last = null;
+        this.canvas.addEventListener("pointerdown", e => {
+          last = [e.clientX, e.clientY];
+          this.canvas.setPointerCapture(e.pointerId);
+        });
+        this.canvas.addEventListener("pointermove", e => {
+          if (!last) return;
+          this.yaw += (e.clientX - last[0]) * 0.012;
+          this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch + (e.clientY - last[1]) * 0.012));
+          last = [e.clientX, e.clientY];
+          this.draw();
+        });
+        const stop = () => { last = null; };
+        this.canvas.addEventListener("pointerup", stop);
+        this.canvas.addEventListener("pointercancel", stop);
+
+        new ResizeObserver(() => this.resize()).observe(this.canvas);
+      }
+
+      resize() {
+        const size = this.canvas.clientWidth;
+        if (!size) return;
+        const dpr = window.devicePixelRatio || 1;
+        this.canvas.width = Math.round(size * dpr);
+        this.canvas.height = Math.round(size * dpr);
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.size = size;
+        this.draw();
+      }
+
+      // Physics axes: x out of the screen, y to the right, z up.
+      // Returns screen position [sx, sy] and depth (positive = towards the viewer).
+      project([x, y, z]) {
+        const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
+        const x1 = x * cy - y * sy, y1 = x * sy + y * cy;
+        const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+        const u = y1, v = z * cp - x1 * sp, depth = x1 * cp + z * sp;
+        const c = this.size / 2, R = this.size * 0.36;
+        return [c + R * u, c - R * v, depth];
+      }
+
+      setVector(target) {
+        const from = this.vec;
+        if (reduceMotion) { this.vec = target; this.draw(); return; }
+        const start = performance.now(), duration = 450;
+        const fromLen = vlen(from), toLen = vlen(target);
+        const fromDir = fromLen > 0.02 ? vnorm(from) : vnorm(target);
+        const toDir = toLen > 0.02 ? vnorm(target) : fromDir;
+        cancelAnimationFrame(this.anim);
+        const step = now => {
+          const t = Math.min(1, (now - start) / duration);
+          const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;   // ease in-out
+          const len = fromLen + (toLen - fromLen) * e;
+          this.vec = vscale(slerp(fromDir, toDir, e), len);
+          this.draw();
+          if (t < 1) this.anim = requestAnimationFrame(step);
+          else { this.vec = target; this.draw(); }
+        };
+        this.anim = requestAnimationFrame(step);
+      }
+
+      setReadout(v) {
+        const r = vlen(v);
+        const coords = `(${v.map(x => x.toFixed(2)).join(", ")})`;
+        const note = r > 0.99 ? "not entangled" : r < 0.01 ? "fully entangled" : "partly entangled";
+        this.readout.innerHTML = `${coords}<br>length ${r.toFixed(2)} · <span class="tag">${note}</span>`;
+      }
+
+      // Draw a 3D path; parts behind the sphere are drawn faint and dashed.
+      path(points, color, width) {
+        const ctx = this.ctx;
+        for (let i = 0; i < points.length - 1; i++) {
+          const a = this.project(points[i]), b = this.project(points[i + 1]);
+          const back = (a[2] + b[2]) / 2 < 0;
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = back ? 0.25 : 0.9;
+          ctx.setLineDash(back ? [3, 4] : []);
+          ctx.lineWidth = width;
+          ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
+      }
+
+      circle(f) {
+        return Array.from({ length: 97 }, (_, i) => f((i / 96) * 2 * Math.PI));
+      }
+
+      label(p, text) {
+        const [sx, sy, d] = this.project(p);
+        this.ctx.globalAlpha = d < -0.2 ? 0.35 : 0.95;
+        this.ctx.fillText(text, sx, sy);
+        this.ctx.globalAlpha = 1;
+      }
+
+      draw() {
+        if (!this.size) return;
+        const ctx = this.ctx, s = this.size, c = s / 2, R = s * 0.36;
+        const wire = css("--wire"), muted = css("--muted"), accent = css("--accent");
+        ctx.clearRect(0, 0, s, s);
+
+        // Sphere body
+        const g = ctx.createRadialGradient(c - R * 0.35, c - R * 0.35, R * 0.1, c, c, R);
+        g.addColorStop(0, "rgba(124,156,255,0.16)");
+        g.addColorStop(1, "rgba(124,156,255,0.03)");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(c, c, R, 0, 2 * Math.PI); ctx.fill();
+        ctx.strokeStyle = wire; ctx.lineWidth = 1.2; ctx.stroke();
+
+        // Equator and two meridians
+        this.path(this.circle(t => [Math.cos(t), Math.sin(t), 0]), wire, 1);
+        this.path(this.circle(t => [Math.cos(t), 0, Math.sin(t)]), wire, 1);
+        this.path(this.circle(t => [0, Math.cos(t), Math.sin(t)]), wire, 1);
+
+        // Axes
+        this.path([[-1, 0, 0], [1, 0, 0]], muted, 1);
+        this.path([[0, -1, 0], [0, 1, 0]], muted, 1);
+        this.path([[0, 0, -1], [0, 0, 1]], muted, 1);
+
+        // Axis labels
+        ctx.fillStyle = muted;
+        ctx.font = `${Math.max(10, s * 0.065)}px ui-monospace, monospace`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        this.label([0, 0, 1.22], "|0⟩");
+        this.label([0, 0, -1.22], "|1⟩");
+        this.label([1.3, 0, 0], "|+⟩");
+        this.label([-1.3, 0, 0], "|−⟩");
+        this.label([0, 1.3, 0], "|+i⟩");
+        this.label([0, -1.3, 0], "|−i⟩");
+
+        // State arrow
+        const r = vlen(this.vec);
+        const [ox, oy] = this.project([0, 0, 0]);
+        ctx.fillStyle = accent; ctx.strokeStyle = accent;
+        if (r < 0.02) {                                     // fully entangled: no direction at all
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(ox, oy, 5, 0, 2 * Math.PI); ctx.stroke();
+          return;
+        }
+        const [tx, ty] = this.project(this.vec);
+        const ang = Math.atan2(ty - oy, tx - ox), dist = Math.hypot(tx - ox, ty - oy);
+        const head = Math.min(R * 0.16, dist * 0.6);
+        ctx.lineWidth = 3; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(ox, oy);
+        ctx.lineTo(tx - Math.cos(ang) * head * 0.6, ty - Math.sin(ang) * head * 0.6); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - head * Math.cos(ang - 0.4), ty - head * Math.sin(ang - 0.4));
+        ctx.lineTo(tx - head * Math.cos(ang + 0.4), ty - head * Math.sin(ang + 0.4));
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.arc(ox, oy, 3, 0, 2 * Math.PI); ctx.fill();
+      }
+    }
+
+    const spheres = [];                                     // created once per qubit, reused afterwards
+    function updateSpheres(bloch) {
+      const holder = document.getElementById("spheres");
+      while (spheres.length < bloch.length) {
+        const sp = new BlochSphere(spheres.length);
+        spheres.push(sp);
+      }
+      spheres.forEach((sp, q) => {
+        if (q < bloch.length) {
+          if (sp.card.parentNode !== holder) holder.appendChild(sp.card);
+          sp.setReadout(bloch[q]);
+          sp.setVector(bloch[q]);
+        } else if (sp.card.parentNode) {
+          sp.card.remove();
+          sp.vec = [0, 0, 1];                               // starts from |0⟩ next time it appears
+        }
+      });
+    }
+
     // ---------- Results ----------
     function run() {
-      if (!simulate) return;                       // engine still loading
-      const errorEl = document.getElementById("error");
+      if (!simulate) return;                              // engine still loading
       let result;
       try {
         result = JSON.parse(simulate(JSON.stringify(toCircuit())));
-        errorEl.textContent = "";
       } catch (err) {
-        errorEl.textContent = "Simulation error: " + err;
+        say("Simulation error: " + err);
         return;
       }
       const bars = document.getElementById("bars");
@@ -247,9 +612,7 @@
           <span>${(p * 100).toFixed(1)}%</span>`;
         bars.appendChild(row);
       });
-      document.getElementById("bloch").textContent = result.bloch
-        .map((v, q) => `qubit ${q}: (${v.map(x => x.toFixed(2)).join(", ")})`)
-        .join("\n");
+      updateSpheres(result.bloch);
     }
 
     // ---------- Start-up ----------
